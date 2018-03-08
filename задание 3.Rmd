@@ -1,0 +1,171 @@
+---
+title: "zadanie3"
+author: "A.Lukyanova"
+date: '8 марта 2018 г '
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library('ISLR')
+library('GGally')
+library('MASS')
+library('mlbench')
+```
+
+В данном задании мы работаем с предварительно загруженными данными PimaIndiansDiabetes (пакет mlbench) - случаи диабета у женщин индейского племени Пима. в данном пакете:
+
+-pregnant - количество беременных
+
+-glucose - концентрация глюкозы
+
+-pressure - артериальное давление
+
+-triceps - толщина кожи
+
+-insulin - количество инсулина в крови
+
+-mass - масса тела индекс
+
+-pedigree - предраспололоженность к диабету
+
+-age - возраст
+
+-diabets - тест на диабет (pos - есть, neg - нет)
+
+Загружаем данные в обучающую выборку.
+```{r generate-data, message = F}
+my.seed <- 123
+train.percent <- 0.75
+options("ggmatrix.progress.bar" = FALSE)
+data(PimaIndiansDiabetes)
+head(PimaIndiansDiabetes)
+set.seed(my.seed)
+inTrain <- sample(seq_along(PimaIndiansDiabetes$diabetes),
+                  nrow(PimaIndiansDiabetes)*train.percent)
+df <- PimaIndiansDiabetes[inTrain, ]
+# фактические значения на обучающей выборке
+Fakt <- df$diabetes
+```
+
+Построим графики разброса
+```{r plot-1,message = F}
+ggp <- ggpairs(PimaIndiansDiabetes)
+print(ggp, progress = FALSE)
+```
+
+Построим логистическую регрессию
+```{r regression}
+model.logit <- glm(diabetes ~ glucose, data = df, family = 'binomial')
+summary(model.logit)
+
+# прогноз: вероятности принадлежности классу 'Yes' (дефолт)
+p.logit <- predict(model.logit, df, type = 'response')
+Prognoz <- factor(ifelse(p.logit > 0.5, 2, 1),
+                  levels = c(1, 2),
+                  labels = c('No', 'Yes'))
+
+# матрица неточностей
+conf.m <- table(Fakt, Prognoz)
+conf.m
+
+# чувствительность
+conf.m[2, 2] / sum(conf.m[2, ])
+
+# специфичность
+conf.m[1, 1] / sum(conf.m[1, ])
+
+# верность
+sum(diag(conf.m)) / sum(conf.m)
+```
+
+Построим модель LDA.
+```{r model}
+model.lda <- lda(diabetes ~ glucose, data = PimaIndiansDiabetes[inTrain, ])
+model.lda
+
+
+# прогноз: вероятности принадлежности классу 'Yes' (дефолт)
+p.lda <- predict(model.lda, df, type = 'response')
+Prognoz <- factor(ifelse(p.lda$posterior[, 'pos'] > 0.5, 
+                         2, 1),
+                  levels = c(1, 2),
+                  labels = c('neg', 'pos'))
+# матрица неточностей
+conf.m <- table(Fakt, Prognoz)
+conf.m
+
+# чувствительность
+conf.m[2, 2] / sum(conf.m[2, ])
+
+# специфичность
+conf.m[1, 1] / sum(conf.m[1, ])
+
+# верность
+sum(diag(conf.m)) / sum(conf.m)
+```
+
+Чукствительность, специфичность и верность у моделей совпали. Построим ROC-кривую для модели LDA.
+```{r model_1}
+# считаем 1-SPC и TPR для всех вариантов границы отсечения
+x <- NULL    # для (1 - SPC)
+y <- NULL    # для TPR
+# заготовка под матрицу неточностей
+tbl <- as.data.frame(matrix(rep(0, 4), 2, 2))
+rownames(tbl) <- c('fact.No', 'fact.Yes')
+colnames(tbl) <- c('predict.No', 'predict.Yes')
+# вектор вероятностей для перебора
+p.vector <- seq(0, 1, length = 501)
+# цикл по вероятностям отсечения
+for (p in p.vector){
+  # прогноз
+  Prognoz <- factor(ifelse(p.lda$posterior[, 'pos'] > p, 
+                           2, 1),
+                    levels = c(1, 2),
+                    labels = c('neg', 'pos'))
+  
+  # фрейм со сравнением факта и прогноза
+  df.compare <- data.frame(Fakt = Fakt, Prognoz = Prognoz)
+  
+  # заполняем матрицу неточностей
+  tbl[1, 1] <- nrow(df.compare[df.compare$Fakt == 'neg' & df.compare$Prognoz == 'neg', ])
+  tbl[2, 2] <- nrow(df.compare[df.compare$Fakt == 'pos' & df.compare$Prognoz == 'pos', ])
+  tbl[1, 2] <- nrow(df.compare[df.compare$Fakt == 'neg' & df.compare$Prognoz == 'pos', ])
+  tbl[2, 1] <- nrow(df.compare[df.compare$Fakt == 'pos' & df.compare$Prognoz == 'neg', ])
+  
+  # считаем характеристики
+  TPR <- tbl[2, 2] / sum(tbl[2, 2] + tbl[2, 1])
+  y <- c(y, TPR)
+  SPC <- tbl[1, 1] / sum(tbl[1, 1] + tbl[1, 2])
+  x <- c(x, 1 - SPC)
+}
+# строим ROC-кривую
+par(mar = c(5, 5, 1, 1))
+# кривая
+plot(x, y, type = 'l', col = 'blue', lwd = 3,
+     xlab = '(1 - SPC)', ylab = 'TPR', 
+     xlim = c(0, 1), ylim = c(0, 1))
+# прямая случайного классификатора
+abline(a = 0, b = 1, lty = 3, lwd = 2)
+
+#точка для вероятности 0.5
+points(x[p.vector == 0.5], y[p.vector == 0.5], pch = 16)
+text(x[p.vector == 0.5], y[p.vector == 0.5], 'p = 0.5', pos = 4)
+
+# точка для вероятности 0.2
+points(x[p.vector == 0.2], y[p.vector == 0.2], pch = 16)
+text(x[p.vector == 0.2], y[p.vector == 0.2], 'p = 0.2', pos = 4)
+
+Prognoz <- factor(ifelse(p.lda$posterior[, 'pos'] > 0.2, 
+                         2, 1),
+                  levels = c(1, 2),
+                  labels = c('neg', 'pos'))
+conf.m <- table(Fakt, Prognoz)
+conf.m
+# чувствительность
+conf.m[2, 2] / sum(conf.m[2, ])
+# специфичность
+conf.m[1, 1] / sum(conf.m[1, ])
+# верность
+sum(diag(conf.m)) / sum(conf.m)
+```
